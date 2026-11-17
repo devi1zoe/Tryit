@@ -6,7 +6,7 @@ policy, the inner sandbox, the agent loop). The outer loop is in the style of th
 Darwin Gödel Machine (open-ended archive, self-referential proposer) and Meta-Harness
 (the proposer reads the full history of code, scores and traces from files).
 
-An **agent = model × harness**. Any model (Anthropic natively, others through LiteLLM)
+An **agent = model × harness**. Any model (Anthropic and OpenAI natively, others through LiteLLM or any OpenAI-compatible endpoint)
 can be paired with any harness generation from any experiment.
 
 This is the deliberately small first version: 8 quick benchmark tasks, one cloud
@@ -80,8 +80,24 @@ Results go to `runs/<experiment>/`: `archive/gen_XXXX/` holds each generation's
 `harness/`, `meta.json`, `eval.json`, `probes.json`, `audit.json`, `patch.diff`,
 `NOTES.md`, the proposer's run, and per-task `traces/`. `report.md` summarises.
 
-The anthropic provider needs `ANTHROPIC_API_KEY` (or another credential the SDK can find).
-`budget_usd` in the experiment config is a hard cap.
+Providers: `anthropic` (needs `ANTHROPIC_API_KEY`), `openai` (needs `OPENAI_API_KEY`;
+`base_url` also points it at any OpenAI-compatible server such as vLLM), `litellm`
+(optional, any LiteLLM model) and `scripted` (offline tests). In the cloud environment the
+proxy injects the OpenAI key, so set a placeholder: `export OPENAI_API_KEY=proxy-injected`.
+Every run starts with a one-token preflight call, so a missing key or an empty balance
+stops the run immediately instead of producing all-zero scores.
+
+`budget_usd` in the experiment config is a hard cap. Prices for budget accounting live in
+`rsi/llm.py` (OpenAI ones are approximate); override per model with `price: [in, out]`.
+
+OpenAI quick start:
+
+```bash
+export OPENAI_API_KEY=proxy-injected
+python -m rsi eval   --agent configs/agents/gpt6luna-seed.yaml            # cheapest
+python -m rsi evolve --config configs/evolve/openai-smoke.yaml            # < $1
+python -m rsi evolve --config configs/evolve/openai-small.yaml            # gpt-6.1-sol, cap $20
+```
 
 ### Choosing models
 

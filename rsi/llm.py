@@ -6,6 +6,7 @@ the outer loop controls which model is used and how much is spent.
 """
 from __future__ import annotations
 
+import os
 import threading
 from dataclasses import dataclass, field
 from typing import Any
@@ -16,6 +17,12 @@ PRICES = {
     "claude-sonnet-5-5": (2.0, 10.0),
     "claude-haiku-5-5": (0.10, 0.50),
     "claude-fable-5-2": (8.0, 40.0),
+    # OpenAI: approximate, from third-party trackers (Nov 2026). Override per model with
+    # `price: [input, output]` in the config if the official page differs.
+    "gpt-6.1-sol": (2.0, 10.0),
+    "gpt-6-luna": (0.10, 0.50),
+    "gpt-5.5": (5.0, 30.0),
+    "gpt-5.4-mini": (0.75, 4.50),
 }
 
 
@@ -29,13 +36,15 @@ class LLMError(RuntimeError):
 
 @dataclass
 class ModelSpec:
-    provider: str = "anthropic"  # anthropic | litellm | scripted
+    provider: str = "anthropic"  # anthropic | openai | litellm | scripted
     name: str = "claude-opus-5-5"
     effort: str | None = "medium"
     max_tokens: int = 16000
     # Server-side refusal fallback (Anthropic). Note for experiments: when it fires,
     # a different model answered that turn; this is recorded per call as `served_model`.
     fallbacks: Any = "default"
+    price: list[float] | None = None  # [input, output] USD per 1M tokens; overrides PRICES
+    base_url: str | None = None  # openai provider: any OpenAI-compatible endpoint (vLLM, ...)
     responses: list[str] = field(default_factory=list)  # scripted provider only
 
     @classmethod
@@ -61,8 +70,8 @@ class Budget:
         if self.limit_usd is not None and self.spent_usd >= self.limit_usd:
             raise BudgetExceeded(f"budget exhausted: ${self.spent_usd:.2f} >= ${self.limit_usd:.2f}")
 
-    def add(self, model: str, inp: int, out: int) -> float:
-        pin, pout = PRICES.get(model, (0.0, 0.0))
+    def add(self, model: str, inp: int, out: int, price=None) -> float:
+        pin, pout = price or PRICES.get(model, (0.0, 0.0))
         cost = inp / 1e6 * pin + out / 1e6 * pout
         with self._lock:
             self.spent_usd += cost
@@ -86,6 +95,15 @@ class LLMClient:
 
             self._anthropic = anthropic
             self._client = anthropic.Anthropic(max_retries=4)
+        elif spec.provider == "openai":
+            import openai
+
+            self._openai = openai
+            key = os.environ.get("OPENAI_API_KEY")
+            if not key:
+                raise LLMError("provider 'openai' needs OPENAI_API_KEY (in a cloud session whose proxy "
+                               "injects the key, set it to any placeholder such as proxy-injected)")
+            self._client = openai.OpenAI(api_key=key, base_url=spec.base_url, max_retries=4)
         elif spec.provider == "litellm":
             try:
                 import litellm  # optional dependency
@@ -104,6 +122,8 @@ class LLMClient:
             return self._scripted(messages)
         if p == "anthropic":
             return self._call_anthropic(system, messages)
+        if p == "openai":
+            return self._call_openai(system, messages)
         return self._call_litellm(system, messages)
 
     # -- providers -------------------------------------------------------------------
@@ -132,9 +152,44 @@ class LLMClient:
         inp = (u.input_tokens or 0) + (getattr(u, "cache_read_input_tokens", 0) or 0) + \
               (getattr(u, "cache_creation_input_tokens", 0) or 0)
         out = u.output_tokens or 0
-        cost = self.budget.add(self.spec.name, inp, out)
+        cost = self.budget.add(self.spec.name, inp, out, self.spec.price)
         return {"text": text, "input_tokens": inp, "output_tokens": out, "cost": cost,
                 "served_model": resp.model, "stop_reason": resp.stop_reason}
+
+    def _call_openai(self, system: str, messages: list[dict]) -> dict:
+        o = self._openai
+        kwargs: dict[str, Any] = dict(model=self.spec.name, max_completion_tokens=self.spec.max_tokens,
+                                      messages=[{"role": "system", "content": system}] + messages)
+        if self.spec.effort:
+            kwargs["reasoning_effort"] = self.spec.effort
+        try:
+            resp = self._client.chat.completions.create(**kwargs)
+        except o.RateLimitError as e:
+            raise LLMError(f"rate limited or out of credits: {e}") from e
+        except o.APIStatusError as e:
+            raise LLMError(f"API error {e.status_code}: {e.message}") from e
+        except o.APIConnectionError as e:
+            raise LLMError(f"connection error: {e}") from e
+        choice = resp.choices[0]
+        text = choice.message.content or ""
+        if not text and getattr(choice.message, "refusal", None):
+            text = f"[the model declined to respond: {choice.message.refusal}]"
+        inp = resp.usage.prompt_tokens if resp.usage else 0
+        out = resp.usage.completion_tokens if resp.usage else 0
+        cost = self.budget.add(self.spec.name, inp, out, self.spec.price)
+        return {"text": text, "input_tokens": inp, "output_tokens": out, "cost": cost,
+                "served_model": resp.model, "stop_reason": choice.finish_reason}
+
+    def preflight(self):
+        """One tiny call so that a missing key or empty balance fails before a run starts."""
+        if self.spec.provider == "scripted":
+            return
+        saved = self.spec.max_tokens
+        try:
+            self.spec.max_tokens = 2000
+            self.complete("Reply with the single word: ok", [{"role": "user", "content": "ping"}])
+        finally:
+            self.spec.max_tokens = saved
 
     def _call_litellm(self, system: str, messages: list[dict]) -> dict:  # pragma: no cover
         lm = self._litellm

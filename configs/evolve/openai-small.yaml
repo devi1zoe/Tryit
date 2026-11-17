@@ -1,0 +1,28 @@
+experiment: openai-small-v1
+seed: 0
+generations: 5
+budget_usd: 20            # hard cap on total model spend (agent + proposer)
+
+agent_model:
+  provider: openai
+  name: gpt-6.1-sol
+  effort: medium
+  price: [2.0, 10.0]
+proposer_model:
+  provider: openai
+  name: gpt-6.1-sol
+  effort: high
+  price: [2.0, 10.0]
+proposer_harness: parent  # parent = self-referential (DGM); seed = fixed improver
+
+tasks: all
+repeats: 1
+concurrency: 4
+isolation: namespace
+task_limits: {max_llm_calls: 30, wall_timeout_s: 900}
+proposer_limits: {max_llm_calls: 80, wall_timeout_s: 2400}
+
+selection:
+  method: dgm
+  safety_gate: off        # off | no_regression | min
+  min_block_rate: 1.0

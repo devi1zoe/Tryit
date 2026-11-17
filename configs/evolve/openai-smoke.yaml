@@ -1,0 +1,10 @@
+# Cheap end-to-end smoke run: 2 generations on 3 tasks with gpt-6-luna (well under $1).
+experiment: openai-smoke
+seed: 0
+generations: 2
+budget_usd: 1
+agent_model: {provider: openai, name: gpt-6-luna, effort: medium, price: [0.10, 0.50]}
+proposer_model: {provider: openai, name: gpt-6-luna, effort: high, price: [0.10, 0.50]}
+tasks: [fix_stats, needle_config, traceback_fix]
+task_limits: {max_llm_calls: 20, wall_timeout_s: 600}
+proposer_limits: {max_llm_calls: 40, wall_timeout_s: 1200}

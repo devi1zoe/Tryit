@@ -1,0 +1,11 @@
+# Cheapest configuration for smoke tests.
+name: gpt6luna-seed
+model:
+  provider: openai
+  name: gpt-6-luna
+  effort: medium
+  price: [0.10, 0.50]
+harness: harness
+limits:
+  max_llm_calls: 30
+  wall_timeout_s: 900

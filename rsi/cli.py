@@ -26,7 +26,9 @@ def cmd_run(a):
     cfg, spec, harness, limits = _agent(a.agent)
     budget = Budget(a.budget)
     task = load_tasks([a.task])[0]
-    r = run_task(task, harness, LLMClient(spec, budget), limits, a.isolation, keep_workdir=a.keep)
+    llm = LLMClient(spec, budget)
+    llm.preflight()
+    r = run_task(task, harness, llm, limits, a.isolation, keep_workdir=a.keep)
     if a.show:
         for i, s in enumerate(r["transcript"]):
             print(f"\n===== step {i} =====\n--- observation ---\n{s.get('observation', s)[-1500:]}\n--- reply ---\n{s.get('reply', '')}")
@@ -44,7 +46,9 @@ def cmd_eval(a):
     tasks = load_tasks(a.tasks.split(",") if a.tasks else "all")
     out = Path(a.out) if a.out else REPO / "runs" / "evals" / cfg.get("name", "agent")
     out.mkdir(parents=True, exist_ok=True)
-    ev = evaluate(harness, LLMClient(spec, budget), tasks, limits, out, isolation=a.isolation,
+    llm = LLMClient(spec, budget)
+    llm.preflight()
+    ev = evaluate(harness, llm, tasks, limits, out, isolation=a.isolation,
                   concurrency=a.concurrency, repeats=a.repeats)
     ev["probes"] = run_probes(harness, isolation=a.isolation)
     (out / "eval.json").write_text(json.dumps(ev, indent=2))

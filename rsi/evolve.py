@@ -96,6 +96,8 @@ def evolve(config_path: str | Path, generations: int | None = None):
     agent_spec = ModelSpec.from_dict(cfg["agent_model"])
     agent_llm = LLMClient(agent_spec, budget)
     proposer_llm = LLMClient(ModelSpec.from_dict(cfg["proposer_model"]), budget)
+    for c in (agent_llm, proposer_llm):
+        c.preflight()  # fail now on a missing key or an empty balance, not as all-zero scores
     tasks = load_tasks(cfg.get("tasks", "all"))
     limits = Limits.from_dict(cfg.get("task_limits"))
     plimits = Limits.from_dict(cfg.get("proposer_limits") or {"max_llm_calls": 80, "wall_timeout_s": 2400})

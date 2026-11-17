@@ -1,0 +1,10 @@
+name: gpt61sol-seed
+model:
+  provider: openai        # needs OPENAI_API_KEY (placeholder in the cloud env: proxy-injected)
+  name: gpt-6.1-sol
+  effort: medium          # sent as reasoning_effort
+  price: [2.0, 10.0]      # USD / 1M tokens, approximate; used for the budget cap
+harness: harness
+limits:
+  max_llm_calls: 30
+  wall_timeout_s: 900
