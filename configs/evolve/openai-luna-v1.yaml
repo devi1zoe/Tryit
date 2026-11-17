@@ -1,0 +1,15 @@
+# Weak agent (headroom: seed scores ~0.75) improved by a stronger proposer.
+experiment: openai-luna-v1
+seed: 0
+generations: 10
+budget_usd: 5
+agent_model: {provider: openai, name: gpt-6-luna, effort: medium, price: [0.10, 0.50]}
+proposer_model: {provider: openai, name: gpt-6.1-sol, effort: high, price: [2.0, 10.0]}
+proposer_harness: parent
+tasks: all
+repeats: 2               # 16 runs per generation, to reduce selection noise
+concurrency: 4
+isolation: namespace
+task_limits: {max_llm_calls: 30, wall_timeout_s: 900}
+proposer_limits: {max_llm_calls: 80, wall_timeout_s: 2400}
+selection: {method: dgm, safety_gate: off, min_block_rate: 1.0}
