@@ -1,0 +1,366 @@
+--- parent/agent.py
++++ child/agent.py
+@@ -1,11 +1,13 @@
+ """The agent loop: model -> parse -> approve -> execute -> observe."""
+ from . import approval, context, sandbox, tools
++from .completion import CompletionTracker
+ 
+ 
+ def run_agent(task: str, workdir: str, llm, limits: dict) -> dict:
+     max_steps = int(limits.get("max_llm_calls", 30))
+     messages = [{"role": "user", "content": context.initial_message(task, workdir)}]
+     steps = []
++    completion = CompletionTracker(workdir)
+     status = "step_limit"
+     for _ in range(max_steps):
+         try:
+@@ -17,9 +19,15 @@
+         kind, cmd = tools.parse_action(reply)
+         step = {"kind": kind, "command": cmd}
+         if kind == "submit":
++            feedback = completion.submission_feedback()
++            if feedback is None:
++                steps.append(step)
++                status = "submitted"
++                break
++            step["accepted"] = False
+             steps.append(step)
+-            status = "submitted"
+-            break
++            messages.append({"role": "user", "content": feedback})
++            continue
+         if kind == "error":
+             obs = context.format_format_error(cmd)
+         else:
+@@ -30,6 +38,7 @@
+             else:
+                 rc, out = sandbox.execute(cmd, workdir)
+                 step["returncode"] = rc
++                completion.observe(rc, out)
+                 obs = context.format_observation(rc, out)
+         steps.append(step)
+         messages.append({"role": "user", "content": obs})
+--- parent/completion.py
++++ child/completion.py
+@@ -0,0 +1,114 @@
++"""Ground completion decisions in executions and actual workspace contents."""
++import hashlib
++import os
++import stat
++
++# Interpreter/tool caches are not task deliverables or evidence of an edit.
++_IGNORED_DIRS = {
++    ".git", "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache",
++}
++
++
++def snapshot(workdir):
++    """Content fingerprints, without following links or opening special files."""
++    result = {}
++    for root, dirs, files in os.walk(workdir, followlinks=False):
++        dirs[:] = sorted(d for d in dirs if d not in _IGNORED_DIRS)
++        links = [d for d in dirs if os.path.islink(os.path.join(root, d))]
++        dirs[:] = [d for d in dirs if d not in links]
++        for name in sorted(files + links):
++            path = os.path.join(root, name)
++            rel = os.path.relpath(path, workdir)
++            try:
++                info = os.lstat(path)
++                if stat.S_ISLNK(info.st_mode):
++                    result[rel] = ("link", os.readlink(path))
++                elif stat.S_ISREG(info.st_mode):
++                    digest = hashlib.sha256()
++                    with open(path, "rb") as stream:
++                        for chunk in iter(lambda: stream.read(131072), b""):
++                            digest.update(chunk)
++                    result[rel] = ("file", stat.S_IMODE(info.st_mode), digest.hexdigest())
++            except OSError:
++                # Unreadable files should not prevent the agent from working.
++                result[rel] = ("unreadable",)
++    return result
++
++
++class CompletionTracker:
++    def __init__(self, workdir):
++        self.workdir = workdir
++        self.initial = snapshot(workdir)
++        self.current = self.initial
++        self.executions = 0
++        self.last_change = 0
++        self.last_success = 0
++        self.last_returncode = None
++        self.review_at = None
++        self.no_changes_check = None
++
++    def observe(self, returncode, output=""):
++        self.executions += 1
++        current = snapshot(self.workdir)
++        if current != self.current:
++            self.last_change = self.executions
++        self.current = current
++        self.last_returncode = returncode
++        if returncode == 0:
++            self.last_success = self.executions
++            if "NO_CHANGES_NEEDED" in output.splitlines():
++                self.no_changes_check = self.executions
++
++    def changes(self):
++        created = sorted(self.current.keys() - self.initial.keys())
++        deleted = sorted(self.initial.keys() - self.current.keys())
++        modified = sorted(p for p in self.current.keys() & self.initial.keys()
++                          if self.current[p] != self.initial[p])
++        lines = []
++        for label, paths in (("Created", created), ("Modified", modified), ("Deleted", deleted)):
++            if paths:
++                shown = ", ".join(repr(p) for p in paths[:15])
++                if len(shown) > 1500:
++                    shown = shown[:1500] + "..."
++                extra = f" (+{len(paths) - 15} more)" if len(paths) > 15 else ""
++                lines.append(f"{label}: {shown}{extra}")
++        return "\n".join(lines) if lines else "No task files have changed from the starting workspace."
++
++    def submission_feedback(self):
++        """None means accept; otherwise request an evidence-producing command.
++
++        Successful commands after the last edit count as verification evidence,
++        not proof of correctness. No task-specific tests or filenames are assumed.
++        """
++        changed = self.current != self.initial
++        verified = (self.last_returncode == 0
++                    and self.last_success > self.last_change)
++        # Read-only tasks are valid, but must explicitly pass a completion review.
++        reviewed = (self.review_at is not None
++                    and self.no_changes_check is not None
++                    and self.no_changes_check > self.review_at)
++        if verified and (changed or reviewed):
++            return None
++        self.review_at = self.executions
++        reasons = []
++        if not self.executions:
++            reasons.append("No shell commands have been executed.")
++        elif self.last_returncode != 0:
++            reasons.append("The last executed command did not succeed.")
++        if not changed:
++            reasons.append("No deliverable changes are recorded. Inspection is not implementation.")
++        if not verified:
++            reasons.append("There is no successful verification command after the latest edit.")
++        return (
++            "Completion checkpoint: NOT submitted.\n"
++            + "\n".join(reasons) + "\nWorkspace evidence:\n" + self.changes()
++            + "\nOnly fenced shell commands that actually ran affect the workspace; "
++              "claims in a reply do not create files or run tests.\n"
++              "Re-read the task and finish any missing work. Then run a separate, "
++              "task-relevant verification command and inspect its result before submitting again. "
++              "Check required output files exist and their contents are correct; for code, "
++              "run the relevant tests and check edge cases. If the task is read-only or "
++              "already satisfied, run a command that verifies the original requirements and, "
++              "only if it succeeds, prints the exact line NO_CHANGES_NEEDED to acknowledge "
++              "that no deliverable changes are required. Then submit again; no gratuitous edit is needed."
++        )
+--- parent/context.py
++++ child/context.py
+@@ -14,6 +14,23 @@
+ (no editors such as vim or nano). To create or edit files use cat with heredocs, sed,
+ or python3 -c / python3 scripts.
+ 
++Work from the actual command results, not from imagined actions. Only the code
++inside your bash block executes: a plan or a claim that a file was written or a
++test passed does not do the work. Inspection is not implementation. If a required
++file is missing, create it; if a command fails, diagnose and correct it.
++
++Inspect relevant files, make the requested changes, then run a separate
++verification command and read its result. Check all requested deliverables and
++constraints, not just the first example. For code, run the specified tests and
++consider edge cases from the specification. For workspace-wide edits, search the
++whole requested scope and confirm unrelated identifiers/content were preserved.
++Do not alter tests merely to hide a bug. Avoid dumping entire large files: use
++targeted searches, line ranges, or small samples; truncated output is incomplete.
++
++Submit only after the work exists on disk and a subsequent verification command
++has succeeded. A completion checkpoint may ask for missing execution evidence;
++it is not a successful submission. Read-only tasks need verification, not edits.
++
+ When the task is complete and you have verified the result, reply with:
+ 
+ ```bash
+@@ -21,7 +38,7 @@
+ ```
+ """
+ 
+-MAX_OBS_CHARS = 8000
++MAX_OBS_CHARS = 5000
+ 
+ 
+ def initial_message(task: str, workdir: str) -> str:
+@@ -31,7 +48,8 @@
+ def format_observation(returncode: int, output: str) -> str:
+     if len(output) > MAX_OBS_CHARS:
+         half = MAX_OBS_CHARS // 2
+-        output = (output[:half] + f"\n... [{len(output) - MAX_OBS_CHARS} characters truncated] ...\n"
++        output = (output[:half] + f"\n... [{len(output) - MAX_OBS_CHARS} characters truncated; "
++                            "use a targeted command to inspect omitted content] ...\n"
+                   + output[-half:])
+     return f"Exit code: {returncode}\nOutput:\n{output}" if output else f"Exit code: {returncode}\n(no output)"
+ 
+@@ -41,5 +59,5 @@
+ 
+ 
+ def format_format_error(msg: str) -> str:
+-    return (f"Format error: {msg}\nReply with a short thought and exactly one ```bash block, "
+-            "or ```bash\necho SUBMIT\n``` when finished.")
++    return (f"Format error: {msg}\nReply with a short thought and exactly one fenced bash block, "
++            "containing the next command needed to implement or verify the task.")
+--- parent/test_harness.py
++++ child/test_harness.py
+@@ -0,0 +1,151 @@
++"""Offline checks: python3 -m unittest harness.test_harness."""
++import json
++from pathlib import Path
++import tempfile
++import unittest
++
++from . import check_action, run_agent
++from .completion import CompletionTracker
++from .context import format_observation
++from .tools import parse_action
++
++FENCE = "`" * 3
++
++
++def action(command):
++    return "I will execute this command.\n" + FENCE + "bash\n" + command + "\n" + FENCE
++
++
++class HarnessTests(unittest.TestCase):
++    def run_script(self, wd, commands):
++        observations = []
++        replies = iter(action(command) for command in commands)
++
++        def llm(system, messages):
++            observations.append(messages[-1]["content"])
++            return next(replies)
++
++        result = run_agent("Complete the requested workspace task.", wd, llm,
++                           {"max_llm_calls": len(commands)})
++        json.dumps(result)
++        return result, observations
++
++    def test_premature_submit_then_recover(self):
++        with tempfile.TemporaryDirectory() as wd:
++            result, obs = self.run_script(wd, [
++                "echo SUBMIT", "ls -la", "echo SUBMIT",
++                "printf done > result.txt", "test -s result.txt", "echo SUBMIT",
++            ])
++            self.assertEqual(result["status"], "submitted")
++            self.assertFalse(result["steps"][0]["accepted"])
++            self.assertFalse(result["steps"][2]["accepted"])
++            self.assertIn("No shell commands have been executed", obs[1])
++            self.assertIn("No task files have changed", obs[3])
++            self.assertEqual(Path(wd, "result.txt").read_text(), "done")
++
++    def test_claimed_success_does_not_count(self):
++        with tempfile.TemporaryDirectory() as wd:
++            replies = iter(["All tests passed.\n" + action("echo SUBMIT")] * 2)
++            result = run_agent("Write a file.", wd, lambda *_: next(replies),
++                               {"max_llm_calls": 2})
++            self.assertEqual(result["status"], "step_limit")
++            self.assertTrue(all(s.get("accepted") is False for s in result["steps"]))
++
++    def test_edit_needs_subsequent_check(self):
++        with tempfile.TemporaryDirectory() as wd:
++            result, obs = self.run_script(wd, [
++                "printf hello > output.txt", "echo SUBMIT",
++                "test -s output.txt", "echo SUBMIT",
++            ])
++            self.assertEqual(result["status"], "submitted")
++            self.assertIn("Created: 'output.txt'", obs[2])
++            self.assertIn("no successful verification", obs[2])
++
++    def test_normal_edit_and_check_has_no_extra_turn(self):
++        with tempfile.TemporaryDirectory() as wd:
++            result, _ = self.run_script(wd, [
++                "printf x > output.txt", "test -s output.txt", "echo SUBMIT",
++            ])
++            self.assertEqual(result["status"], "submitted")
++            self.assertEqual(result["n_steps"], 3)
++
++    def test_failed_check_blocks_completion(self):
++        with tempfile.TemporaryDirectory() as wd:
++            result, obs = self.run_script(wd, [
++                "printf x > output.txt", "false", "echo SUBMIT",
++                "test -s output.txt", "echo SUBMIT",
++            ])
++            self.assertEqual(result["status"], "submitted")
++            self.assertIn("last executed command did not succeed", obs[3])
++
++    def test_read_only_task_can_complete_after_review(self):
++        with tempfile.TemporaryDirectory() as wd:
++            Path(wd, "existing.txt").write_text("already correct\n")
++            result, _ = self.run_script(wd, [
++                "cat existing.txt", "echo SUBMIT",
++                "grep -qx 'already correct' existing.txt && echo NO_CHANGES_NEEDED", "echo SUBMIT",
++            ])
++            self.assertEqual(result["status"], "submitted")
++
++    def test_another_edit_invalidates_previous_verification(self):
++        with tempfile.TemporaryDirectory() as wd:
++            result, _ = self.run_script(wd, [
++                "printf x > output.txt", "test -s output.txt",
++                "printf y > output.txt", "echo SUBMIT",
++            ])
++            self.assertEqual(result["status"], "step_limit")
++            self.assertFalse(result["steps"][-1]["accepted"])
++
++    def test_snapshot_tracks_content_and_ignores_cache(self):
++        with tempfile.TemporaryDirectory() as wd:
++            path = Path(wd, "file.txt")
++            path.write_text("before")
++            tracker = CompletionTracker(wd)
++            Path(wd, "__pycache__").mkdir()
++            Path(wd, "__pycache__", "junk.pyc").write_bytes(b"cache")
++            tracker.observe(0)
++            self.assertIn("No task files have changed", tracker.changes())
++            path.write_text("after!")
++            tracker.observe(0)
++            self.assertIn("Modified: 'file.txt'", tracker.changes())
++            self.assertIsNotNone(tracker.submission_feedback())
++            tracker.observe(0)
++            self.assertIsNone(tracker.submission_feedback())
++            path.unlink()
++            tracker.observe(0)
++            self.assertIn("Deleted: 'file.txt'", tracker.changes())
++            self.assertIsNotNone(tracker.submission_feedback())
++
++    def test_formatting_and_policy_contract(self):
++        self.assertEqual(parse_action(action("echo SUBMIT")), ("submit", None))
++        self.assertEqual(parse_action(action("echo ok")), ("bash", "echo ok"))
++        self.assertEqual(parse_action("No command")[0], "error")
++        self.assertEqual(parse_action(action("true") + action("false"))[0], "error")
++        self.assertIn("targeted command", format_observation(0, "x" * 10000))
++        with tempfile.TemporaryDirectory() as wd:
++            for command in ("ls -la", "python3 -m unittest", "printf x > local.txt"):
++                self.assertTrue(check_action(command, wd)[0], command)
++            for command in ("r" + "m -rf /", "s" + "udo true",
++                            "cat /etc/" + "shadow", "cu" + "rl https://example.invalid",
++                            "echo x > " + "/etc/example"):
++                self.assertFalse(check_action(command, wd)[0], command)
++
++    def test_denied_command_does_not_count(self):
++        with tempfile.TemporaryDirectory() as wd:
++            result, _ = self.run_script(wd, ["s" + "udo true", "echo SUBMIT"])
++            self.assertEqual(result["status"], "step_limit")
++            self.assertFalse(result["steps"][0]["approved"])
++            self.assertFalse(result["steps"][1]["accepted"])
++
++    def test_llm_exception_and_empty_budget(self):
++        with tempfile.TemporaryDirectory() as wd:
++            def failed_llm(*_):
++                raise RuntimeError("call budget exhausted")
++            result = run_agent("task", wd, failed_llm, {"max_llm_calls": 1})
++            self.assertTrue(result["status"].startswith("llm_error:"))
++            result = run_agent("task", wd, failed_llm, {"max_llm_calls": 0})
++            self.assertEqual(result["status"], "step_limit")
++
++
++if __name__ == "__main__":
++    unittest.main()

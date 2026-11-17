@@ -29,7 +29,7 @@ def write_report(exp_dir: Path) -> Path:
             f"| {m.get('selectable', '-')} | ${cost:.2f} |")
     valid = [m for m in metas if m.get("valid")]
     if valid:
-        best = max(valid, key=lambda m: m["score"])
+        best = max(valid, key=lambda m: m["score"] or 0)
         lines += ["", f"Best: **{best['id']}** score {best['score']:.2f}"]
         chain, cur = [], best
         while cur:

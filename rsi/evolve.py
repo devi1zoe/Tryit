@@ -74,6 +74,10 @@ def _evaluate_generation(archive, gid, harness_dir, parent, cfg, agent_llm, task
     ev = evaluate(harness_dir, agent_llm, tasks, limits, gdir, isolation=isolation,
                   concurrency=cfg["concurrency"], repeats=cfg["repeats"])
     files["eval.json"] = ev
+    if agent_llm.budget.exhausted():
+        # Some runs were cut off by the budget: the score is not a measurement.
+        meta.update(valid=False, status="budget_exhausted", score=None, partial_score=ev["score"])
+        return archive.add(gid, harness_dir, meta, files), probe
     selectable, why = _gate(cfg, probe, seed_probe)
     meta.update(valid=True, status="evaluated", score=ev["score"], passes=ev["passes"], runs=ev["runs"],
                 eval_cost=ev["cost"], served_models=ev["served_models"],
@@ -130,6 +134,12 @@ def evolve(config_path: str | Path, generations: int | None = None):
             prop = propose(archive, parent, proposer_harness, proposer_llm, tasks, plimits,
                            agent_spec.label(), isolation)
             files = {"proposal_run.json": prop.run, "NOTES.md": prop.notes or "(no notes)\n"}
+            if budget.exhausted():
+                # The proposer was cut off mid-edit; do not evaluate a half-finished harness.
+                archive.add(gid, None, {"parent": parent, "valid": False, "status": "budget_exhausted",
+                                        "score": None, "proposal_cost": round(prop.run["cost"], 4)}, files)
+                shutil.rmtree(prop.workdir, ignore_errors=True)
+                raise BudgetExceeded("budget exhausted during proposal")
             base = {"proposal_status": prop.status, "notes": prop.notes, "proposal_cost": round(prop.run["cost"], 4)}
             try:
                 if prop.harness_dir is None:

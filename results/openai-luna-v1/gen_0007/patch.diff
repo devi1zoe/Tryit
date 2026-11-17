@@ -1,0 +1,116 @@
+--- parent/context.py
++++ child/context.py
+@@ -15,9 +15,11 @@
+ or python3 -c / python3 scripts.
+ 
+ Each action starts a fresh Bash shell in the working directory: `cd`, variables,
+-and shell options do not persist. Bash starts with `set -e -o pipefail`, so an
+-unhandled failing command or pipeline stops the script. Handle expected nonzero
+-results explicitly with `if`, `!`, or `||` (grep returns 1 for no matches).
++and shell options do not persist. Bash uses `set -e -o pipefail` and
++`shopt -s inherit_errexit`: unhandled failures stop scripts and command
++substitutions. Capture check output in a standalone assignment before using it:
++`value=$(check)` propagates failure, but `echo "$(check)"` can hide it.
++Handle expected nonzero results with `if`, `!`, or `||` (grep returns 1 for no matches).
+ Do not mask failed verification with `|| true` or a later successful command.
+ Use `sed -n` for bounded output rather than pipelines ending in `head`, which can
+ cause upstream SIGPIPE failures. Fence delimiters must be on their own lines;
+@@ -27,6 +29,11 @@
+ inside your bash block executes: a plan or a claim that a file was written or a
+ test passed does not do the work. Inspection is not implementation. If a required
+ file is missing, create it; if a command fails, diagnose and correct it.
++
++Do not assume the workspace is a Git checkout; check before using repository
++commands. Without Git, save originals under /tmp before editing when exact
++preservation matters, then compare the results. Do not initialize a repository
++just to inspect changes.
+ 
+ Inspect relevant files, make the requested changes, then run a separate
+ verification command and read its result. Check all requested deliverables and
+--- parent/sandbox.py
++++ child/sandbox.py
+@@ -21,8 +21,10 @@
+ def execute(command: str, workdir: str):
+     """Return (returncode, combined output), with a retrievable log if truncated.
+ 
+-    Bash stops on unhandled command and pipeline failures so a later success
+-    cannot hide a failed check. Handle expected nonzero results explicitly.
++    Bash stops on unhandled command and pipeline failures, including inside
++    command substitutions. Handle expected nonzero results explicitly.
++    Tested conditions and successful commands that merely consume a failing
++    substitution can still mask failures, as with errexit generally.
+     Output goes straight to a file rather than an unbounded subprocess.PIPE.
+     Logs live outside the workspace so they cannot count as deliverable edits.
+     Small outputs are returned verbatim and their temporary files are removed.
+@@ -34,7 +36,8 @@
+     try:
+         with os.fdopen(fd, "w+b") as stream:
+             process = subprocess.Popen(
+-                ["bash", "-e", "-o", "pipefail", "-c", command], cwd=workdir, env=env,
++                ["bash", "-e", "-o", "pipefail", "-O", "inherit_errexit",
++                 "-c", command], cwd=workdir, env=env,
+                 stdin=subprocess.DEVNULL, stdout=stream, stderr=subprocess.STDOUT,
+                 start_new_session=True,
+             )
+--- parent/test_reliability.py
++++ child/test_reliability.py
+@@ -105,6 +105,59 @@
+             self.assertNotEqual(rc, 0)
+             self.assertNotIn("masked", output)
+ 
++    def test_substitution_stops_before_a_later_success(self):
++        commands = (
++            "value=$(false; printf masked)",
++            "value=$(printf x | grep absent | cat; printf masked)",
++            "outer=$(inner=$(false; printf masked); printf '%s' \"$inner\")",
++        )
++        for command in commands:
++            with self.subTest(command=command), tempfile.TemporaryDirectory() as wd:
++                rc, output = execute(
++                    command + "\nprintf masked\nprintf bad > late.txt", wd)
++                self.assertNotEqual(rc, 0)
++                self.assertNotIn("masked", output)
++                self.assertFalse(Path(wd, "late.txt").exists())
++
++    def test_successful_and_handled_substitutions_still_work(self):
++        commands = (
++            ("value=$(printf 'ok\\n\\n')", "ok"),
++            ("value=$(false || printf handled)", "handled"),
++            ("value=$(if false; then printf bad; else printf fallback; fi)", "fallback"),
++            ("if value=$(false); then exit 9; else value=expected; fi", "expected"),
++        )
++        for command, expected in commands:
++            with self.subTest(command=command), tempfile.TemporaryDirectory() as wd:
++                rc, output = execute(command + "\nprintf '%s' \"$value\"", wd)
++                self.assertEqual((rc, output), (0, expected))
++
++    def test_agent_rejects_failure_hidden_inside_substitution(self):
++        commands = iter([
++            "printf 'value = 1\\n' > result.py",
++            "value=$(python3 -c \"assert False, 'broken check'\"; printf masked)"
++            "\nprintf '%s' \"$value\"",
++            "echo SUBMIT",
++            "value=$(python3 -c 'import result; assert result.value == 1; print(1)')"
++            "\ntest \"$value\" = 1",
++            "echo SUBMIT",
++        ])
++        observations = []
++
++        def llm(system, messages):
++            observations.append(messages[-1]["content"])
++            return action(next(commands))
++
++        with tempfile.TemporaryDirectory() as wd:
++            result = run_agent("Create and verify result.py.", wd, llm,
++                               {"max_llm_calls": 5})
++            self.assertEqual(Path(wd, "result.py").read_text(), "value = 1\n")
++        self.assertEqual(result["status"], "submitted")
++        self.assertNotEqual(result["steps"][1]["returncode"], 0)
++        self.assertFalse(result["steps"][2]["accepted"])
++        self.assertIn("last executed command did not succeed", observations[3])
++        self.assertIn("AssertionError: broken check", observations[2])
++        self.assertNotIn("masked", observations[2])
++
+     def test_expected_failures_can_be_handled(self):
+         with tempfile.TemporaryDirectory() as wd:
+             rc, output = execute(

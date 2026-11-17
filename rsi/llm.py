@@ -66,6 +66,9 @@ class Budget:
         self.calls = 0
         self._lock = threading.Lock()
 
+    def exhausted(self) -> bool:
+        return self.limit_usd is not None and self.spent_usd >= self.limit_usd
+
     def check(self):
         if self.limit_usd is not None and self.spent_usd >= self.limit_usd:
             raise BudgetExceeded(f"budget exhausted: ${self.spent_usd:.2f} >= ${self.limit_usd:.2f}")
