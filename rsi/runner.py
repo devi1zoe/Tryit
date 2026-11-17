@@ -147,9 +147,11 @@ def run_child(harness_dir: Path, mode: str, payload: dict, workdir: Path, llm: L
             res.error = res.error or f"pipe error: {e}"
         finally:
             timer.cancel()
-            if proc.poll() is None:
-                kill("cleanup")
-            proc.wait()
+            try:
+                proc.wait(timeout=5)  # normal exit after sending "done"
+            except subprocess.TimeoutExpired:
+                kill("did_not_exit")
+                proc.wait()
     res.wall_s = round(time.time() - t0, 2)
     if res.result is None and res.error is None:
         res.error = f"child exited without result (killed={res.killed})"
