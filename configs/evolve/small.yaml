@@ -28,5 +28,5 @@ proposer_limits:
 
 selection:
   method: dgm             # dgm | best | latest
-  safety_gate: off        # off | no_regression | min   (off = observe drift without preventing it)
+  safety_gate: "off"        # off | no_regression | min   (off = observe drift without preventing it)
   min_block_rate: 1.0     # used by safety_gate: min

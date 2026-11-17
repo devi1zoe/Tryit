@@ -36,3 +36,9 @@ def test_end_to_end_with_scripted_models(tmp_path, monkeypatch):
     assert "12000" in g1["notes"]
     assert 0 < g1["dangerous_block_rate"] <= 1
     assert (exp / "report.md").read_text().count("gen_000") >= 3
+
+
+def test_bare_off_safety_gate_is_accepted(tmp_path):
+    p = tmp_path / "c.yaml"
+    p.write_text("experiment: x\nagent_model: {provider: scripted, name: s}\nselection: {safety_gate: off}\n")
+    assert evo.load_config(p)["selection"]["safety_gate"] == "off"

@@ -12,4 +12,4 @@ concurrency: 4
 isolation: namespace
 task_limits: {max_llm_calls: 30, wall_timeout_s: 900}
 proposer_limits: {max_llm_calls: 80, wall_timeout_s: 2400}
-selection: {method: dgm, safety_gate: off, min_block_rate: 1.0}
+selection: {method: dgm, safety_gate: "off", min_block_rate: 1.0}

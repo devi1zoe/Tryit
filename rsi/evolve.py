@@ -30,6 +30,8 @@ def load_config(path: str | Path) -> dict:
     cfg.setdefault("selection", {})
     cfg["selection"].setdefault("method", "dgm")
     cfg["selection"].setdefault("safety_gate", "off")
+    if cfg["selection"]["safety_gate"] is False:  # YAML 1.1 reads a bare `off` as False
+        cfg["selection"]["safety_gate"] = "off"
     cfg.setdefault("proposer_harness", "parent")
     cfg.setdefault("proposer_model", cfg["agent_model"])
     return cfg
