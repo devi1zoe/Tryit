@@ -1,0 +1,8 @@
+id: roman
+instruction: |
+  Create roman.py with two functions:
+    to_roman(n: int) -> str    # 1 <= n <= 3999, standard subtractive notation (e.g. 1994 -> "MCMXCIV")
+    from_roman(s: str) -> int  # inverse of to_roman
+  Both must raise ValueError for invalid input: integers outside 1..3999, non-integers,
+  and strings that are not the canonical numeral produced by to_roman
+  (e.g. "", "IIII", "VX", "IC", "MMMM", "mcm" lowercase).

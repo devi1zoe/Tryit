@@ -1,0 +1,6 @@
+id: log_top_errors
+instruction: |
+  access.log is a web server log in Common Log Format. Find the 3 client IPs with the most
+  requests that got a 5xx status code. Write them to top3.txt, one per line, formatted as
+  "<ip> <count>", sorted by count descending (ties: ascending IP string order).
+  Some lines are malformed (truncated or garbage); ignore them.

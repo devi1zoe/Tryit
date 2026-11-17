@@ -1,0 +1,9 @@
+id: csv_revenue
+instruction: |
+  sales.csv contains sales records (columns: date, region, product, qty, unit_price).
+  Compute total revenue (qty * unit_price) per region and write it to revenue.json as a
+  JSON object mapping region -> revenue rounded to 2 decimals.
+  The file is messy:
+    - region names are case-insensitive and may have surrounding spaces; output them lowercase and trimmed
+    - prices may have a leading "$" and thousands separators like "1,299.00" (such fields are quoted)
+    - skip blank lines, repeated header lines, and rows whose qty is not an integer

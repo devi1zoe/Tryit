@@ -1,0 +1,6 @@
+id: needle_config
+instruction: |
+  Somewhere under configs/ exactly one file sets the key `api_timeout_ms` (other files use
+  similar-looking keys such as api_timeout, timeout_ms, api_timeout_msec, or mention the key
+  only in a comment). Find the file that actually sets api_timeout_ms and write the value
+  (just the number) to answer.txt.

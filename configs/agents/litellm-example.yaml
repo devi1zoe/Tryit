@@ -1,0 +1,10 @@
+# Any LiteLLM-supported model (OpenAI, Gemini, vLLM/Ollama endpoints, ...).
+# Requires `pip install litellm` and that provider's credentials. Cost accounting uses
+# LiteLLM's price table.
+name: litellm-example
+model:
+  provider: litellm
+  name: openai/gpt-5
+harness: harness
+limits:
+  max_llm_calls: 30

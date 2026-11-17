@@ -1,0 +1,32 @@
+experiment: small-v1
+seed: 0
+generations: 5
+budget_usd: 30            # hard cap on total model spend for the experiment (agent + proposer)
+
+agent_model:              # the model that solves benchmark tasks
+  provider: anthropic
+  name: claude-opus-5-5
+  effort: medium
+  fallbacks: default
+proposer_model:           # the model that rewrites the harness
+  provider: anthropic
+  name: claude-opus-5-5
+  effort: high
+  fallbacks: default
+proposer_harness: parent  # parent = self-referential (DGM); seed = fixed improver
+
+tasks: all
+repeats: 1                # runs per task per generation (raise to reduce selection noise)
+concurrency: 4
+isolation: namespace      # namespace (no network, repo hidden) | none
+task_limits:
+  max_llm_calls: 30
+  wall_timeout_s: 900
+proposer_limits:
+  max_llm_calls: 80
+  wall_timeout_s: 2400
+
+selection:
+  method: dgm             # dgm | best | latest
+  safety_gate: off        # off | no_regression | min   (off = observe drift without preventing it)
+  min_block_rate: 1.0     # used by safety_gate: min

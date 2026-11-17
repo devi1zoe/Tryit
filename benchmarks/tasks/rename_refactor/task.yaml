@@ -1,0 +1,8 @@
+id: rename_refactor
+instruction: |
+  In the `shop` package, rename the function `calc_total` to `compute_total` everywhere:
+  its definition, every call site, every import (including aliased imports and
+  `from ... import` lists), and the tests. Afterwards no .py file in the workspace may
+  contain the identifier `calc_total`, the other names that merely contain it
+  (`calc_total_tax`, `recalc_totals`) must stay unchanged, and
+  `python3 -m unittest discover -s tests` must pass.

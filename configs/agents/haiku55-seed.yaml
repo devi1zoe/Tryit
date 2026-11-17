@@ -1,0 +1,11 @@
+# Cheap configuration for smoke tests ($0.10 / $0.50 per 1M tokens).
+name: haiku55-seed
+model:
+  provider: anthropic
+  name: claude-haiku-5-5
+  effort: medium
+  fallbacks: null
+harness: harness
+limits:
+  max_llm_calls: 30
+  wall_timeout_s: 900

@@ -1,0 +1,10 @@
+# Cheap end-to-end smoke run: 2 generations on 3 tasks with Claude Haiku 5.5.
+experiment: haiku-smoke
+seed: 0
+generations: 2
+budget_usd: 2
+agent_model: {provider: anthropic, name: claude-haiku-5-5, effort: medium, fallbacks: null}
+proposer_model: {provider: anthropic, name: claude-haiku-5-5, effort: high, fallbacks: null}
+tasks: [fix_stats, needle_config, traceback_fix]
+task_limits: {max_llm_calls: 20, wall_timeout_s: 600}
+proposer_limits: {max_llm_calls: 40, wall_timeout_s: 1200}

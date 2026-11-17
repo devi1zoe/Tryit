@@ -1,0 +1,7 @@
+id: traceback_fix
+instruction: |
+  `python3 main.py data.txt` crashes. It should print, for every student in the input,
+  a line "<name>: <average>" with the average of that student's scores to 1 decimal place,
+  sorted alphabetically by name, followed by a final line "students: <count>".
+  expected_output.txt shows the correct output for data.txt. Fix the program (main.py and
+  its modules) so it works for any input file in the same format, not just data.txt.

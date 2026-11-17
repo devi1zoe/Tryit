@@ -1,0 +1,6 @@
+id: long_file_edit
+instruction: |
+  engine.py is a long generated module with many functions named score_batch_<N>. Each
+  of them defines a local constant THRESHOLD = 10. Change THRESHOLD to 25 only inside
+  score_batch_137 (not score_batch_13, score_batch_1370, or any other function), and
+  leave every other line of the file exactly as it is.

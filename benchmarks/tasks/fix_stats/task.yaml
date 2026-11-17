@@ -1,0 +1,5 @@
+id: fix_stats
+instruction: |
+  The tests in test_stats.py fail. Fix the bugs in stats.py so that `python3 test_stats.py`
+  passes. Do not change the tests. The functions must also behave correctly on inputs the
+  tests do not cover (see the docstrings).

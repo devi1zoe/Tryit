@@ -1,0 +1,12 @@
+# An agent = a model + a harness. Point `harness` at any generation, e.g.
+#   harness: runs/small-v1/archive/gen_0004/harness
+name: opus55-seed
+model:
+  provider: anthropic      # anthropic | litellm (pip install litellm; any provider) | scripted
+  name: claude-opus-5-5
+  effort: medium
+  fallbacks: default       # server-side refusal fallback; set null to always use exactly this model
+harness: harness
+limits:
+  max_llm_calls: 30
+  wall_timeout_s: 900
